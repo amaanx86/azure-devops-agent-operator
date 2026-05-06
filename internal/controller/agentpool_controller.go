@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -85,20 +86,20 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context,
 		return ctrl.Result{}, nil
 	}
 
-	// Step 4: Resolve ADO pool ID (cached in status).
-	if pool.Status.PoolID == 0 {
-		result, err := r.resolvePoolID(ctx, pool)
-		if err != nil || result.RequeueAfter > 0 {
-			return result, err
-		}
-	}
-
-	// Step 5: Fetch PAT from Secret.
+	// Step 4: Fetch PAT from Secret.
 	pat, result := r.fetchPATToken(ctx, req, pool)
 	if result.RequeueAfter > 0 {
 		return result, nil
 	}
+
+	// Step 5: Resolve ADO pool ID (cached in status).
 	adoClient := azuredevops.NewClient(pat)
+	if pool.Status.PoolID == 0 {
+		result, err := r.resolvePoolID(ctx, pool, adoClient)
+		if err != nil || result.RequeueAfter > 0 {
+			return result, err
+		}
+	}
 
 	// Step 6: Query ADO for pending/running jobs.
 	pending, running, err := adoClient.GetJobCounts(ctx,
@@ -173,8 +174,11 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context,
 	r.manageDummyAgent(ctx, pool, adoClient, activeCount)
 
 	// Step 12: Update status.
-	pool.Status.ActiveAgents = int32(activeCount)
-	pool.Status.PendingJobs = int32(pending + running)
+	log.Info("Updating status", "activeCount", activeCount, "pending", pending, "running", running)
+	activeAgentsVal := int32(activeCount)
+	pendingJobsVal := int32(pending + running)
+	pool.Status.ActiveAgents = &activeAgentsVal
+	pool.Status.PendingJobs = &pendingJobsVal
 
 	// Step 13: Update conditions.
 	meta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
@@ -186,10 +190,12 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context,
 			activeCount, pending+running),
 	})
 
+	log.Info("About to update status subresource", "activeAgents", pool.Status.ActiveAgents, "pendingJobs", pool.Status.PendingJobs)
 	if err := r.Status().Update(ctx, pool); err != nil {
 		log.Error(err, "Failed to update agent pool status")
 		return ctrl.Result{}, err
 	}
+	log.Info("Status subresource updated successfully")
 
 	// Step 14: Requeue after interval (the heartbeat).
 	return ctrl.Result{RequeueAfter: reconcileInterval}, nil
@@ -197,9 +203,8 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context,
 
 // resolvePoolID resolves and caches the ADO pool ID in status.
 func (r *AgentPoolReconciler) resolvePoolID(ctx context.Context,
-	pool *agentsv1alpha1.AgentPool) (ctrl.Result, error) {
+	pool *agentsv1alpha1.AgentPool, adoClient *azuredevops.Client) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	adoClient := azuredevops.NewClient("dummy")
 	poolID, err := adoClient.GetPoolID(ctx, pool.Spec.OrganizationURL,
 		pool.Spec.PoolName)
 	if err != nil {
@@ -278,8 +283,13 @@ func (r *AgentPoolReconciler) manageDummyAgent(ctx context.Context,
 		id, err := adoClient.RegisterDummyAgent(ctx,
 			pool.Spec.OrganizationURL, int(pool.Status.PoolID), dummyName)
 		if err != nil {
-			log.Error(err, "Failed to register dummy agent")
-		} else {
+			if !strings.Contains(err.Error(), "already contains an agent with name") {
+				log.Error(err, "Failed to register dummy agent")
+				return
+			}
+			log.Info("Dummy agent already exists, attempting to find its ID")
+		}
+		if id > 0 {
 			pool.Status.DummyAgentID = int32(id)
 			log.Info("Registered dummy agent", "agentID", id)
 			r.Recorder.Event(pool, corev1.EventTypeNormal, "DummyAgentRegistered",
