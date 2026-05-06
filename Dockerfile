@@ -24,6 +24,23 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 FROM gcr.io/distroless/static:nonroot
+
+ARG VERSION=latest
+ARG REVISION=""
+ARG CREATED=""
+
+LABEL org.opencontainers.image.title="azure-devops-agent-operator" \
+      org.opencontainers.image.description="A Kubernetes operator for elastically-scalable Azure DevOps self-hosted agents" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.source="https://github.com/amaanx86/azure-devops-agent-operator" \
+      org.opencontainers.image.documentation="https://github.com/amaanx86/azure-devops-agent-operator#readme" \
+      org.opencontainers.image.authors="Amaan Ul Haq Siddiqui" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.vendor="amaanx86" \
+      org.opencontainers.image.url="https://github.com/amaanx86/azure-devops-agent-operator" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.created="${CREATED}"
+
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532
