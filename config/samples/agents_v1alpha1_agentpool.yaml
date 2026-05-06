@@ -1,0 +1,9 @@
+apiVersion: agents.amaanx86.github.io/v1alpha1
+kind: AgentPool
+metadata:
+  labels:
+    app.kubernetes.io/name: azure-devops-agent-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: agentpool-sample
+spec:
+  # TODO(user): Add fields here

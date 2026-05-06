@@ -8,4 +8,14 @@ layout:
 - go.kubebuilder.io/v4
 projectName: azure-devops-agent-operator
 repo: github.com/amaanx86/azure-devops-agent-operator
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: amaanx86.github.io
+  group: agents
+  kind: AgentPool
+  path: github.com/amaanx86/azure-devops-agent-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"
