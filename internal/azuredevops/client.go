@@ -159,7 +159,9 @@ func (c *Client) getJSON(ctx context.Context, url string,
 	if err != nil {
 		return fmt.Errorf("ADO API call failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -200,7 +202,9 @@ func (c *Client) postJSON(ctx context.Context, url string,
 	if err != nil {
 		return nil, fmt.Errorf("ADO API call failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -228,7 +232,9 @@ func (c *Client) deleteJSON(ctx context.Context, url string) error {
 	if err != nil {
 		return fmt.Errorf("ADO API call failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)

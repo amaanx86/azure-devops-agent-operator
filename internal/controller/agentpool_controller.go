@@ -23,7 +23,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,7 +72,7 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context,
 
 	// Step 2: Handle deletion via finalizer.
 	if !pool.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, log, pool)
+		return r.handleDeletion(ctx, pool)
 	}
 
 	// Step 3: Ensure finalizer is present.
@@ -88,69 +87,17 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context,
 
 	// Step 4: Resolve ADO pool ID (cached in status).
 	if pool.Status.PoolID == 0 {
-		adoClient := azuredevops.NewClient("dummy")
-		poolID, err := adoClient.GetPoolID(ctx, pool.Spec.OrganizationURL,
-			pool.Spec.PoolName)
-		if err != nil {
-			log.Error(err, "Failed to resolve pool ID")
-			meta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
-				Type:               "Available",
-				Status:             metav1.ConditionFalse,
-				ObservedGeneration: pool.Generation,
-				Reason:             "PoolResolutionFailed",
-				Message:            fmt.Sprintf("Could not find ADO pool: %v", err),
-			})
-			if err := r.Status().Update(ctx, pool); err != nil {
-				log.Error(err, "Failed to update status after pool resolution error")
-			}
-			return ctrl.Result{RequeueAfter: reconcileInterval}, nil
-		}
-		pool.Status.PoolID = int32(poolID)
-		if err := r.Status().Update(ctx, pool); err != nil {
-			log.Error(err, "Failed to cache pool ID in status")
-			return ctrl.Result{}, err
+		result, err := r.resolvePoolID(ctx, pool)
+		if err != nil || result.RequeueAfter > 0 {
+			return result, err
 		}
 	}
 
 	// Step 5: Fetch PAT from Secret.
-	secret := &corev1.Secret{}
-	secretNN := types.NamespacedName{
-		Namespace: req.Namespace,
-		Name:      pool.Spec.TokenSecretRef.Name,
+	pat, result := r.fetchPATToken(ctx, req, pool)
+	if result.RequeueAfter > 0 {
+		return result, nil
 	}
-	if err := r.Get(ctx, secretNN, secret); err != nil {
-		log.Error(err, "Failed to fetch token secret")
-		meta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
-			Type:               "Available",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: pool.Generation,
-			Reason:             "SecretNotFound",
-			Message:            fmt.Sprintf("Could not read secret: %v", err),
-		})
-		if err := r.Status().Update(ctx, pool); err != nil {
-			log.Error(err, "Failed to update status after secret error")
-		}
-		return ctrl.Result{RequeueAfter: reconcileInterval}, nil
-	}
-
-	patBytes, ok := secret.Data[pool.Spec.TokenSecretRef.Key]
-	if !ok {
-		err := fmt.Errorf("key %q not found in secret", pool.Spec.TokenSecretRef.Key)
-		log.Error(err, "Token secret missing key")
-		meta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
-			Type:               "Available",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: pool.Generation,
-			Reason:             "SecretKeyMissing",
-			Message:            fmt.Sprintf("Key missing in secret: %v", err),
-		})
-		if err := r.Status().Update(ctx, pool); err != nil {
-			log.Error(err, "Failed to update status")
-		}
-		return ctrl.Result{RequeueAfter: reconcileInterval}, nil
-	}
-
-	pat := string(patBytes)
 	adoClient := azuredevops.NewClient(pat)
 
 	// Step 6: Query ADO for pending/running jobs.
@@ -189,10 +136,8 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context,
 	}
 
 	// Step 8: Compute desired replicas.
-	desiredCount := max(pending+running, int(pool.Spec.MinAgents))
-	if desiredCount > int(pool.Spec.MaxAgents) {
-		desiredCount = int(pool.Spec.MaxAgents)
-	}
+	desiredCount := min(max(pending+running, int(pool.Spec.MinAgents)),
+		int(pool.Spec.MaxAgents))
 
 	// Step 9: Scale up if needed.
 	toCreate := desiredCount - activeCount
@@ -225,32 +170,7 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context,
 	}
 
 	// Step 11: Manage dummy agent for scale-to-zero.
-	if activeCount == 0 && pool.Status.DummyAgentID == 0 {
-		dummyName := fmt.Sprintf("%s-dummy", pool.Name)
-		id, err := adoClient.RegisterDummyAgent(ctx,
-			pool.Spec.OrganizationURL, int(pool.Status.PoolID), dummyName)
-		if err != nil {
-			log.Error(err, "Failed to register dummy agent")
-		} else {
-			pool.Status.DummyAgentID = int32(id)
-			log.Info("Registered dummy agent", "agentID", id)
-			r.Recorder.Event(pool, corev1.EventTypeNormal, "DummyAgentRegistered",
-				fmt.Sprintf("Registered dummy agent %s (ID: %d)", dummyName, id))
-		}
-	}
-	// Unregister dummy if real agents are now running.
-	if activeCount > 0 && pool.Status.DummyAgentID != 0 {
-		if err := adoClient.UnregisterAgent(ctx,
-			pool.Spec.OrganizationURL, int(pool.Status.PoolID),
-			int(pool.Status.DummyAgentID)); err != nil {
-			log.Error(err, "Failed to unregister dummy agent")
-		} else {
-			pool.Status.DummyAgentID = 0
-			log.Info("Unregistered dummy agent")
-			r.Recorder.Event(pool, corev1.EventTypeNormal, "DummyAgentUnregistered",
-				"Unregistered dummy agent; real agents are now active")
-		}
-	}
+	r.manageDummyAgent(ctx, pool, adoClient, activeCount)
 
 	// Step 12: Update status.
 	pool.Status.ActiveAgents = int32(activeCount)
@@ -275,9 +195,115 @@ func (r *AgentPoolReconciler) Reconcile(ctx context.Context,
 	return ctrl.Result{RequeueAfter: reconcileInterval}, nil
 }
 
+// resolvePoolID resolves and caches the ADO pool ID in status.
+func (r *AgentPoolReconciler) resolvePoolID(ctx context.Context,
+	pool *agentsv1alpha1.AgentPool) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	adoClient := azuredevops.NewClient("dummy")
+	poolID, err := adoClient.GetPoolID(ctx, pool.Spec.OrganizationURL,
+		pool.Spec.PoolName)
+	if err != nil {
+		log.Error(err, "Failed to resolve pool ID")
+		meta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
+			Type:               "Available",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: pool.Generation,
+			Reason:             "PoolResolutionFailed",
+			Message:            fmt.Sprintf("Could not find ADO pool: %v", err),
+		})
+		if err := r.Status().Update(ctx, pool); err != nil {
+			log.Error(err, "Failed to update status after pool resolution error")
+		}
+		return ctrl.Result{RequeueAfter: reconcileInterval}, nil
+	}
+	pool.Status.PoolID = int32(poolID)
+	if err := r.Status().Update(ctx, pool); err != nil {
+		log.Error(err, "Failed to cache pool ID in status")
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
+}
+
+// fetchPATToken retrieves the ADO PAT from the referenced Secret.
+func (r *AgentPoolReconciler) fetchPATToken(ctx context.Context,
+	req ctrl.Request, pool *agentsv1alpha1.AgentPool) (string, ctrl.Result) {
+	log := logf.FromContext(ctx)
+	secret := &corev1.Secret{}
+	secretNN := types.NamespacedName{
+		Namespace: req.Namespace,
+		Name:      pool.Spec.TokenSecretRef.Name,
+	}
+	if err := r.Get(ctx, secretNN, secret); err != nil {
+		log.Error(err, "Failed to fetch token secret")
+		meta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
+			Type:               "Available",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: pool.Generation,
+			Reason:             "SecretNotFound",
+			Message:            fmt.Sprintf("Could not read secret: %v", err),
+		})
+		if err := r.Status().Update(ctx, pool); err != nil {
+			log.Error(err, "Failed to update status after secret error")
+		}
+		return "", ctrl.Result{RequeueAfter: reconcileInterval}
+	}
+
+	patBytes, ok := secret.Data[pool.Spec.TokenSecretRef.Key]
+	if !ok {
+		err := fmt.Errorf("key %q not found in secret", pool.Spec.TokenSecretRef.Key)
+		log.Error(err, "Token secret missing key")
+		meta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
+			Type:               "Available",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: pool.Generation,
+			Reason:             "SecretKeyMissing",
+			Message:            fmt.Sprintf("Key missing in secret: %v", err),
+		})
+		if err := r.Status().Update(ctx, pool); err != nil {
+			log.Error(err, "Failed to update status")
+		}
+		return "", ctrl.Result{RequeueAfter: reconcileInterval}
+	}
+
+	return string(patBytes), ctrl.Result{}
+}
+
+// manageDummyAgent handles registration and unregistration of the dummy agent.
+func (r *AgentPoolReconciler) manageDummyAgent(ctx context.Context,
+	pool *agentsv1alpha1.AgentPool, adoClient *azuredevops.Client,
+	activeCount int) {
+	log := logf.FromContext(ctx)
+	if activeCount == 0 && pool.Status.DummyAgentID == 0 {
+		dummyName := fmt.Sprintf("%s-dummy", pool.Name)
+		id, err := adoClient.RegisterDummyAgent(ctx,
+			pool.Spec.OrganizationURL, int(pool.Status.PoolID), dummyName)
+		if err != nil {
+			log.Error(err, "Failed to register dummy agent")
+		} else {
+			pool.Status.DummyAgentID = int32(id)
+			log.Info("Registered dummy agent", "agentID", id)
+			r.Recorder.Event(pool, corev1.EventTypeNormal, "DummyAgentRegistered",
+				fmt.Sprintf("Registered dummy agent %s (ID: %d)", dummyName, id))
+		}
+	}
+	if activeCount > 0 && pool.Status.DummyAgentID != 0 {
+		if err := adoClient.UnregisterAgent(ctx,
+			pool.Spec.OrganizationURL, int(pool.Status.PoolID),
+			int(pool.Status.DummyAgentID)); err != nil {
+			log.Error(err, "Failed to unregister dummy agent")
+		} else {
+			pool.Status.DummyAgentID = 0
+			log.Info("Unregistered dummy agent")
+			r.Recorder.Event(pool, corev1.EventTypeNormal, "DummyAgentUnregistered",
+				"Unregistered dummy agent; real agents are now active")
+		}
+	}
+}
+
 // handleDeletion cleans up external resources (dummy agent) before deletion.
 func (r *AgentPoolReconciler) handleDeletion(ctx context.Context,
-	log logr.Logger, pool *agentsv1alpha1.AgentPool) (ctrl.Result, error) {
+	pool *agentsv1alpha1.AgentPool) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 	if !hasFinalizer(pool, finalizerName) {
 		return ctrl.Result{}, nil
 	}
@@ -327,23 +353,24 @@ func (r *AgentPoolReconciler) buildAgentPod(pool *agentsv1alpha1.AgentPool,
 	podName := fmt.Sprintf("%s-%s", pool.Name, randomString(5))
 
 	// Build environment variables.
-	env := []corev1.EnvVar{
-		{Name: "AZP_URL", Value: pool.Spec.OrganizationURL},
-		{Name: "AZP_POOL", Value: pool.Spec.PoolName},
-		{Name: "AZP_AGENT_NAME", Value: podName},
-		{Name: "AZP_ONCE", Value: "true"},
-		{
+	env := make([]corev1.EnvVar, 0, 5+len(pool.Spec.ExtraEnv))
+	env = append(env,
+		corev1.EnvVar{Name: "AZP_URL", Value: pool.Spec.OrganizationURL},
+		corev1.EnvVar{Name: "AZP_POOL", Value: pool.Spec.PoolName},
+		corev1.EnvVar{Name: "AZP_AGENT_NAME", Value: podName},
+		corev1.EnvVar{Name: "AZP_ONCE", Value: "true"},
+		corev1.EnvVar{
 			Name: "AZP_TOKEN",
 			ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &pool.Spec.TokenSecretRef,
 			},
 		},
-	}
+	)
 	env = append(env, pool.Spec.ExtraEnv...)
 
 	// Build volumes from cache volume templates.
-	var volumes []corev1.Volume
-	var volumeMounts []corev1.VolumeMount
+	volumes := make([]corev1.Volume, 0, len(pool.Spec.CacheVolumes))
+	volumeMounts := make([]corev1.VolumeMount, 0, len(pool.Spec.CacheVolumes))
 	for _, cv := range pool.Spec.CacheVolumes {
 		pvcName := fmt.Sprintf("%s-%s", pool.Name, cv.Name)
 		volumes = append(volumes, corev1.Volume{
