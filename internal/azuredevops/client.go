@@ -107,11 +107,10 @@ func (c *Client) GetJobCounts(ctx context.Context, orgURL string,
 func (c *Client) RegisterDummyAgent(ctx context.Context, orgURL string,
 	poolID int, name string) (int, error) {
 	req := RegisterAgentRequest{
-		Name:              name,
-		Version:           "1.0.0",
-		OSDescription:     "Kubernetes",
-		Enabled:           false,
-		ProvisioningState: "Unavailable",
+		Name:          name,
+		Version:       "2.300.0",
+		OSDescription: "Kubernetes",
+		Enabled:       true,
 		SystemCapabilities: map[string]string{
 			"Agent.OS": "Linux",
 		},

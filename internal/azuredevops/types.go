@@ -78,8 +78,8 @@ type RegisterAgentRequest struct {
 	Enabled bool `json:"enabled"`
 
 	// ProvisioningState indicates the agent's provisioning state.
-	// Set to "Unavailable" for dummy/offline agents.
-	ProvisioningState string `json:"provisioningState"`
+	// Omitted for private agents as they don't support custom provisioning states.
+	ProvisioningState string `json:"provisioningState,omitempty"`
 
 	// SystemCapabilities are key-value labels the ADO platform uses for job routing
 	// and demands matching.
