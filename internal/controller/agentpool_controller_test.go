@@ -21,11 +21,11 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	agentsv1alpha1 "github.com/amaanx86/azure-devops-agent-operator/api/v1alpha1"
 )
@@ -43,15 +43,39 @@ var _ = Describe("AgentPool Controller", func() {
 		agentpool := &agentsv1alpha1.AgentPool{}
 
 		BeforeEach(func() {
+			By("creating Secret with PAT token")
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-token",
+					Namespace: "default",
+				},
+				Data: map[string][]byte{
+					"token": []byte("dummy-pat-token"),
+				},
+			}
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-token", Namespace: "default"}, &corev1.Secret{})
+			if err != nil && errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			}
+
 			By("creating the custom resource for the Kind AgentPool")
-			err := k8sClient.Get(ctx, typeNamespacedName, agentpool)
+			err = k8sClient.Get(ctx, typeNamespacedName, agentpool)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &agentsv1alpha1.AgentPool{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: agentsv1alpha1.AgentPoolSpec{
+						OrganizationURL: "https://dev.azure.com/test",
+						PoolName:        "test-pool",
+						TokenSecretRef: corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: "test-token",
+							},
+							Key: "token",
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
