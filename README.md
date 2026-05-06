@@ -1,9 +1,9 @@
-<table>
+<table border="0" cellpadding="0" cellspacing="0" style="border: none;">
   <tr>
     <td width="200" align="center">
       <img src=".github/assets/azure-devops-agent-operator.png" alt="azure-devops-agent-operator logo" width="180" />
     </td>
-    <td valign="middle">
+    <td valign="middle" style="padding-left: 20px;">
       <h1>azure-devops-agent-operator</h1>
       <p>A Kubernetes operator for elastically-scalable Azure DevOps self-hosted agents.</p>
     </td>
