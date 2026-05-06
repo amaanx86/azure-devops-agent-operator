@@ -131,13 +131,13 @@ type AgentPoolStatus struct {
 	// activeAgents is the count of agent Pods currently in Running or Pending phase.
 	//
 	// +optional
-	ActiveAgents int32 `json:"activeAgents,omitempty"`
+	ActiveAgents *int32 `json:"activeAgents,omitempty"`
 
 	// pendingJobs is the count of jobs in the ADO queue waiting for an agent.
 	// Updated on each reconciliation poll.
 	//
 	// +optional
-	PendingJobs int32 `json:"pendingJobs,omitempty"`
+	PendingJobs *int32 `json:"pendingJobs,omitempty"`
 
 	// poolID is the resolved numeric ID of the ADO agent pool.
 	// Cached here to avoid repeated ADO API lookups; set to 0 if not yet resolved.
