@@ -11,10 +11,25 @@ spec:
     kind: AgentPool
     listKind: AgentPoolList
     plural: agentpools
+    shortNames:
+    - ap
     singular: agentpool
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.poolName
+      name: Pool
+      type: string
+    - jsonPath: .status.activeAgents
+      name: Active
+      type: integer
+    - jsonPath: .status.pendingJobs
+      name: Pending
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: AgentPool is the Schema for the agentpools API
@@ -39,25 +54,343 @@ spec:
           spec:
             description: spec defines the desired state of AgentPool
             properties:
-              foo:
-                description: foo is an example field of AgentPool. Edit agentpool_types.go
-                  to remove/update
+              agentImage:
+                description: |-
+                  agentImage is the container image URI for agent Pods.
+                  Defaults to mcr.microsoft.com/azure-pipelines/vsts-agent:latest if omitted.
                 type: string
+              agentResources:
+                description: agentResources specifies CPU and memory requests/limits
+                  for each agent Pod.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              cacheVolumes:
+                description: |-
+                  cacheVolumes defines PVC templates for per-agent build cache volumes.
+                  Each agent Pod gets its own exclusive PVC based on these templates.
+                  The PVC is bound to a single Pod for the duration of its execution and
+                  released back to the pool when the Pod completes.
+                items:
+                  description: CacheVolumeTemplate describes a PVC template for exclusive
+                    per-agent cache binding.
+                  properties:
+                    mountPath:
+                      description: |-
+                        mountPath is the mount path inside the agent container where the volume
+                        is mounted.
+                      type: string
+                    name:
+                      description: name is the volume name used in the Pod's volumeMounts.
+                      minLength: 1
+                      type: string
+                    size:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      description: size is the requested storage capacity (e.g., "50Gi",
+                        "100Gi").
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    storageClassName:
+                      description: |-
+                        storageClassName is the name of the StorageClass.
+                        If omitted, the default StorageClass is used.
+                      type: string
+                  required:
+                  - mountPath
+                  - name
+                  - size
+                  type: object
+                type: array
+              extraEnv:
+                description: |-
+                  extraEnv contains additional environment variables injected into agent Pods.
+                  These are appended to the standard AZP_* environment variables.
+                items:
+                  description: EnvVar represents an environment variable present in
+                    a Container.
+                  properties:
+                    name:
+                      description: |-
+                        Name of the environment variable.
+                        May consist of any printable ASCII characters except '='.
+                      type: string
+                    value:
+                      description: |-
+                        Variable references $(VAR_NAME) are expanded
+                        using the previously defined environment variables in the container and
+                        any service environment variables. If a variable cannot be resolved,
+                        the reference in the input string will be unchanged. Double $$ are reduced
+                        to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e.
+                        "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)".
+                        Escaped references will never be expanded, regardless of whether the variable
+                        exists or not.
+                        Defaults to "".
+                      type: string
+                    valueFrom:
+                      description: Source for the environment variable's value. Cannot
+                        be used if value is not empty.
+                      properties:
+                        configMapKeyRef:
+                          description: Selects a key of a ConfigMap.
+                          properties:
+                            key:
+                              description: The key to select.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                            optional:
+                              description: Specify whether the ConfigMap or its key
+                                must be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        fieldRef:
+                          description: |-
+                            Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
+                            spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.
+                          properties:
+                            apiVersion:
+                              description: Version of the schema the FieldPath is
+                                written in terms of, defaults to "v1".
+                              type: string
+                            fieldPath:
+                              description: Path of the field to select in the specified
+                                API version.
+                              type: string
+                          required:
+                          - fieldPath
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        fileKeyRef:
+                          description: |-
+                            FileKeyRef selects a key of the env file.
+                            Requires the EnvFiles feature gate to be enabled.
+                          properties:
+                            key:
+                              description: |-
+                                The key within the env file. An invalid key will prevent the pod from starting.
+                                The keys defined within a source may consist of any printable ASCII characters except '='.
+                                During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.
+                              type: string
+                            optional:
+                              default: false
+                              description: |-
+                                Specify whether the file or its key must be defined. If the file or key
+                                does not exist, then the env var is not published.
+                                If optional is set to true and the specified key does not exist,
+                                the environment variable will not be set in the Pod's containers.
+
+                                If optional is set to false and the specified key does not exist,
+                                an error will be returned during Pod creation.
+                              type: boolean
+                            path:
+                              description: |-
+                                The path within the volume from which to select the file.
+                                Must be relative and may not contain the '..' path or start with '..'.
+                              type: string
+                            volumeName:
+                              description: The name of the volume mount containing
+                                the env file.
+                              type: string
+                          required:
+                          - key
+                          - path
+                          - volumeName
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        resourceFieldRef:
+                          description: |-
+                            Selects a resource of the container: only resources limits and requests
+                            (limits.cpu, limits.memory, limits.ephemeral-storage, requests.cpu, requests.memory and requests.ephemeral-storage) are currently supported.
+                          properties:
+                            containerName:
+                              description: 'Container name: required for volumes,
+                                optional for env vars'
+                              type: string
+                            divisor:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: Specifies the output format of the exposed
+                                resources, defaults to "1"
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            resource:
+                              description: 'Required: resource to select'
+                              type: string
+                          required:
+                          - resource
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        secretKeyRef:
+                          description: Selects a key of a secret in the pod's namespace
+                          properties:
+                            key:
+                              description: The key of the secret to select from.  Must
+                                be a valid secret key.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                            optional:
+                              description: Specify whether the Secret or its key must
+                                be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+              maxAgents:
+                default: 10
+                description: |-
+                  maxAgents is the maximum number of concurrent agent Pods.
+                  The controller will not create more agents than this, even if more jobs are pending.
+                  Defaults to 10.
+                format: int32
+                minimum: 1
+                type: integer
+              minAgents:
+                default: 0
+                description: |-
+                  minAgents is the minimum number of agent Pods that should be running.
+                  Set to 0 to enable true scale-to-zero (dummy agent registered with ADO).
+                  Defaults to 0.
+                format: int32
+                minimum: 0
+                type: integer
+              organizationURL:
+                description: |-
+                  organizationURL is the Azure DevOps organization URL.
+                  Example: https://dev.azure.com/myorg
+                pattern: ^https?://
+                type: string
+              poolName:
+                description: poolName is the name of the Azure DevOps agent pool.
+                minLength: 1
+                type: string
+              tokenSecretRef:
+                description: |-
+                  tokenSecretRef references the Kubernetes Secret containing the ADO PAT.
+                  The controller reads the value from Secret[tokenSecretRef.name][tokenSecretRef.key].
+                properties:
+                  key:
+                    description: The key of the secret to select from.  Must be a
+                      valid secret key.
+                    type: string
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  optional:
+                    description: Specify whether the Secret or its key must be defined
+                    type: boolean
+                required:
+                - key
+                type: object
+                x-kubernetes-map-type: atomic
+            required:
+            - organizationURL
+            - poolName
+            - tokenSecretRef
             type: object
           status:
             description: status defines the observed state of AgentPool
             properties:
+              activeAgents:
+                description: activeAgents is the count of agent Pods currently in
+                  Running or Pending phase.
+                format: int32
+                type: integer
               conditions:
                 description: |-
                   conditions represent the current state of the AgentPool resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
+                  Each condition has a unique type and reflects the status of a specific aspect.
 
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                  Standard condition types:
+                  - "Available": the pool is functioning and agents are being scaled correctly
+                  - "Progressing": currently creating/deleting agents or resolving pool ID
+                  - "Degraded": reconciliation failed (e.g., ADO API unreachable, invalid token)
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -116,6 +449,26 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              dummyAgentID:
+                description: |-
+                  dummyAgentID is the agent ID of the registered dummy/offline agent.
+                  Set to 0 if no dummy is currently registered.
+                  Used to implement true scale-to-zero: when activeAgents==0, a dummy
+                  is registered with ADO so the platform accepts jobs into the queue.
+                format: int32
+                type: integer
+              pendingJobs:
+                description: |-
+                  pendingJobs is the count of jobs in the ADO queue waiting for an agent.
+                  Updated on each reconciliation poll.
+                format: int32
+                type: integer
+              poolID:
+                description: |-
+                  poolID is the resolved numeric ID of the ADO agent pool.
+                  Cached here to avoid repeated ADO API lookups; set to 0 if not yet resolved.
+                format: int32
+                type: integer
             type: object
         required:
         - spec
