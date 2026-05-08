@@ -1,5 +1,11 @@
 site_name: Azure DevOps Agent Operator
 site_description: Kubernetes operator for elastically-scalable Azure DevOps self-hosted agents
+repo_url: https://github.com/amaanx86/azure-devops-agent-operator
+repo_name: GitHub
+docs_dir: docs
+
+extra_css:
+  - assets/stylesheets/custom.css
 
 nav:
   - Home: index.md
@@ -9,14 +15,30 @@ nav:
 
 theme:
   name: material
+  logo: assets/logo.png
+  favicon: assets/logo.png
   palette:
-    scheme: default
+    scheme: light
+    primary: blue
+    accent: blue
+  features:
+    - header.autohide
+    - navigation.tabs
+    - navigation.top
+    - toc.integrate
+    - content.code.copy
 
 plugins:
   - search
 
 markdown_extensions:
-  - pymdownx.highlight
+  - attr_list
+  - pymdownx.highlight:
+      use_pygments: true
   - pymdownx.superfences
-  - pymdownx.tasklist
-  - toc
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - toc:
+      permalink: true
+  - admonition
+  - pymdownx.details
