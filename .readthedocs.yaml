@@ -7,4 +7,9 @@ build:
 
 python:
   version: "3.13"
+  install:
+    - requirements: docs/requirements.txt
+
+mkdocs:
+  configuration: mkdocs.yml
         
