@@ -1,0 +1,22 @@
+site_name: Azure DevOps Agent Operator
+site_description: Kubernetes operator for elastically-scalable Azure DevOps self-hosted agents
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Installation: installation.md
+  - Usage: usage.md
+
+theme:
+  name: material
+  palette:
+    scheme: default
+
+plugins:
+  - search
+
+markdown_extensions:
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tasklist
+  - toc
