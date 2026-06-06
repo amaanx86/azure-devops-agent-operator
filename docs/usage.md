@@ -30,7 +30,8 @@ The operator uses the number of queued jobs in Azure DevOps to determine how man
 - If `activePods > pendingJobs` and `activePods > minAgents`, scale down
 - Scale down skips pods that are currently executing a job
 
-Setting `minAgents: 0` enables scale-to-zero. The operator registers an offline dummy agent when idle so Azure DevOps can queue jobs. Setting `minAgents > 0` keeps a baseline of warm agents always ready.
+Setting `minAgents: 0` enables scale-to-zero. The operator registers an offline dummy agent when
+idle so Azure DevOps can queue jobs. Setting `minAgents > 0` keeps a baseline of warm agents ready.
 
 ## Cache Volumes
 
@@ -45,9 +46,11 @@ spec:
       # storageClassName: "fast-ssd"
 ```
 
-Multiple templates are supported. The operator creates `maxAgents` PVCs per template (e.g., `build-agents-cache-buildcache-00` through `build-agents-cache-buildcache-09`).
+Multiple templates are supported. The operator creates `maxAgents` PVCs per template
+(e.g., `build-agents-cache-buildcache-00` through `build-agents-cache-buildcache-09`).
 
-PVCs are released back to the pool when a pod completes, making the warm cache available to the next pod that picks up that slot.
+PVCs are released back to the pool when a pod completes, making the warm cache available to the
+next pod that picks up that slot.
 
 ## Placement
 
@@ -151,4 +154,5 @@ kubectl patch agentpool build-agents \
   --type merge -p '{"spec":{"minAgents":2,"maxAgents":10}}'
 ```
 
-The operator reacts to spec changes within the next reconcile interval (default 30 seconds, or immediately on resource change events).
+The operator reacts to spec changes within the next reconcile interval
+(default 30 seconds, or immediately on resource change events).

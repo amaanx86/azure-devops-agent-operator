@@ -2,7 +2,8 @@
 
 ## Warm Cache Volumes
 
-The Azure Pipelines agent binary (~550 MB) downloads at container startup, which can take several minutes on a cold pod. The operator solves this with pre-provisioned, exclusively-bound PVC pools.
+The Azure Pipelines agent binary (~550 MB) downloads at container startup, which can take several
+minutes on a cold pod. The operator solves this with pre-provisioned, exclusively-bound PVC pools.
 
 ### How It Works
 
@@ -12,7 +13,8 @@ When `cacheVolumes` is configured, the operator:
 2. Assigns one PVC per template exclusively to each new agent pod (labeled `assigned`, pod name recorded)
 3. Releases the PVC back to the free pool when the pod completes
 
-Because the PVC is reused across pod restarts, the agent cache directory survives pod replacement. Subsequent agent pods start in seconds rather than minutes.
+Because the PVC is reused across pod restarts, the agent cache directory survives pod replacement.
+Subsequent agent pods start in seconds rather than minutes.
 
 Example configuration:
 
@@ -34,12 +36,13 @@ spec:
 
 Each template creates `maxAgents` PVCs named `<pool>-cache-<template>-<slot>` (e.g., `build-agents-cache-agent-cache-00`).
 
-The access mode is `ReadWriteOncePod` (GA in Kubernetes 1.29), which guarantees exclusive single-pod mounting at the storage layer.
+The access mode is `ReadWriteOncePod` (GA in Kubernetes 1.29), which guarantees exclusive
+single-pod mounting at the storage layer.
 
 ### Sizing Recommendations
 
 | Content | Recommended Size |
-|---------|-----------------|
+| --- | --- |
 | Agent binary + work directory | 10-20 Gi |
 | Tool cache (Node, Python, Go, etc.) | 10-30 Gi |
 | Docker layer cache | 20-50 Gi |
@@ -55,7 +58,8 @@ Each agent pod runs with `--once` passed to the agent startup script. This cause
 2. Pick up exactly one job
 3. Deregister and exit cleanly
 
-The operator detects completed pods (`Succeeded` or `Failed` phase), releases their PVCs, and deletes them. The reconcile loop then creates new pods to match `minAgents` or pending job demand.
+The operator detects completed pods (`Succeeded` or `Failed` phase), releases their PVCs, and
+deletes them. The reconcile loop then creates new pods to match `minAgents` or pending job demand.
 
 This model prevents job queue pollution from long-lived agents and gives each job a clean environment.
 
@@ -66,9 +70,11 @@ Setting `minAgents: 0` enables true scale-to-zero. When no jobs are pending:
 - All real agent pods are deleted
 - The operator registers an offline "dummy" agent in the pool
 
-Azure DevOps queues jobs against the offline dummy agent rather than rejecting them as "no agents available". When a job is detected, the operator removes the dummy and scales up real agents.
+Azure DevOps queues jobs against the offline dummy agent rather than rejecting them as
+"no agents available". When a job is detected, the operator removes the dummy and scales up real agents.
 
-The dummy agent is an ADO agent object with no corresponding pod. It relies on the Azure DevOps queuing behavior for offline agents. Verify this works in your ADO organization before relying on it in production.
+The dummy agent is an ADO agent object with no corresponding pod. It relies on the Azure DevOps
+queuing behavior for offline agents. Verify this works in your ADO organization before relying on it.
 
 ## Resource Recommendations
 
@@ -113,7 +119,8 @@ spec:
     - name: registry-credentials
 ```
 
-The image must include the Azure Pipelines agent startup script (`start.sh` or equivalent). The operator passes `--once` as a container argument, so the startup script must forward `"$@"` to `run.sh`.
+The image must include the Azure Pipelines agent startup script (`start.sh` or equivalent).
+The operator passes `--once` as a container argument, so the startup script must forward `"$@"` to `run.sh`.
 
 Reference Dockerfile in `docker/` for the bundled image.
 
@@ -148,7 +155,7 @@ The service account must exist in the same namespace.
 The operator exposes Prometheus metrics on the controller pod:
 
 | Metric | Type | Description |
-|--------|------|-------------|
+| --- | --- | --- |
 | `azp_active_agents` | Gauge | Currently running agent pods |
 | `azp_pending_jobs` | Gauge | Jobs waiting in the ADO queue |
 | `azp_available_pvc_slots` | Gauge | Free PVC slots available for scale-up |
@@ -179,11 +186,15 @@ Only one replica is active at a time. Configure at least two replicas to avoid d
 
 ### PVC pending after scale-up
 
-The PVC pool is pre-provisioned at `maxAgents` size. If PVCs remain `Pending`, the storage class may not have available capacity or the cluster lacks a default StorageClass. Specify `storageClassName` explicitly in `cacheVolumes`.
+The PVC pool is pre-provisioned at `maxAgents` size. If PVCs remain `Pending`, the storage class
+may not have available capacity or the cluster lacks a default StorageClass.
+Specify `storageClassName` explicitly in `cacheVolumes`.
 
 ### Dummy agent not accepting jobs
 
-The offline dummy agent behavior depends on Azure DevOps queuing semantics. If jobs fail immediately instead of queuing, verify that your ADO organization queues work against offline agents by checking under **Agent pools** > **Jobs** in the ADO UI.
+The offline dummy agent behavior depends on Azure DevOps queuing semantics. If jobs fail immediately
+instead of queuing, verify that your ADO organization queues work against offline agents by checking
+under **Agent pools** > **Jobs** in the ADO UI.
 
 ### Pods evicted or OOMKilled
 

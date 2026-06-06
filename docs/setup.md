@@ -29,7 +29,7 @@ kubectl get deployment -n azure-devops-agent-operator-system
 
 Required scope summary:
 
-```
+```text
 Agent Pools > Read & Manage
 ```
 
@@ -173,7 +173,8 @@ spec:
 
 ### "agent pool not found in ADO"
 
-The pool name in `spec.poolName` does not match an existing self-hosted pool in Azure DevOps. Create the pool first, then reapply.
+The pool name in `spec.poolName` does not match an existing self-hosted pool in Azure DevOps.
+Create the pool first, then reapply.
 
 ### "authentication failed" or "invalid token"
 

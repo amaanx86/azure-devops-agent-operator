@@ -4,11 +4,12 @@
 
 The operator authenticates to Azure DevOps using a Personal Access Token (PAT). Only one scope is required:
 
-```
+```text
 Agent Pools > Read & Manage
 ```
 
 This allows the operator to:
+
 - Resolve pool IDs by name
 - Register and unregister agent instances (including the dummy agent)
 - Query job requests to detect pending work
