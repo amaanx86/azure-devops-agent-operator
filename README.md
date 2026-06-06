@@ -10,6 +10,14 @@
   </tr>
 </table>
 
+
+<p>
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg"></a>
+  <img alt="Kubernetes 1.29+" src="https://img.shields.io/badge/Kubernetes-1.29%2B-326CE5?logo=kubernetes&logoColor=white">
+  <img alt="Built with kubebuilder" src="https://img.shields.io/badge/built%20with-kubebuilder%20%2F%20controller--runtime-00ADD8?logo=go&logoColor=white">
+  <img alt="Status: Alpha" src="https://img.shields.io/badge/status-alpha-orange.svg">
+</p>
+
 ## Background
 
 Azure DevOps offers several ways to run self-hosted, elastically-scalable
@@ -25,6 +33,9 @@ agents. As of May 2026 the landscape looks like this:
 | **Purpose-built K8s operators** | What this project is | Previously only [MShekow/azure-pipelines-k8s-agent-scaler](https://github.com/MShekow/azure-pipelines-k8s-agent-scaler), [archived July 4, 2025](https://github.com/MShekow/azure-pipelines-k8s-agent-scaler) (maintainer recommended switching to MDP); [microsoft/azure-pipelines-orchestrator](https://github.com/microsoft/azure-pipelines-orchestrator) and [ogmaresca/azp-agent-autoscaler](https://github.com/ogmaresca/azp-agent-autoscaler), both archived earlier |
 
 ### Why not Managed DevOps Pools?
+
+For most teams, MDP or KEDA is the right answer. This operator targets
+the residual cases where neither fits.
 
 If you can use MDP, you probably should — it is the right answer for most
 Azure-native teams. This operator exists for the cases MDP doesn't serve:
@@ -50,11 +61,13 @@ Azure-native teams. This operator exists for the cases MDP doesn't serve:
   behalf, while running agents on your existing Kubernetes cluster
   consumes capacity you already pay for. For high-volume CI workloads
   with spare cluster capacity, this can be materially cheaper.
-- **Full observability** — MDP agents are largely a black box: you
-  can't remote into them, run custom Prometheus exporters on the host,
-  or profile builds at the kernel level. Platform teams that want CI
-  agent telemetry alongside the rest of their workloads in the same
-  Grafana stack benefit from running agents as plain Pods they own.
+- **Host-level observability** — MDP agents run in a Microsoft-managed
+  substrate: you cannot install custom Prometheus exporters on the
+  host, profile builds at the kernel level, or collect host-level
+  metrics. (MDP does support BYO-VNet and proxy configurations for
+  network integration.) Platform teams that want CI agent telemetry
+  alongside the rest of their workloads in the same Grafana stack
+  benefit from running agents as plain Pods they fully own.
 
 ### Why not KEDA?
 
@@ -94,13 +107,15 @@ has structural limitations the operator pattern can solve cleanly:
 - **Ephemeral `ScaledJob` pods cannot safely share cache volumes.**
   Running agents as ephemeral `Kubernetes Job`s with the AZP agent's
   `--once` flag is the recommended KEDA pattern, and it does avoid the
-  mid-job-kill class of bug. But Kubernetes has no mechanism to ensure
-  a `ReadWriteOnce` PVC is mounted to only one Job at a time (the
-  `Once` in `RWO` is per-node, not per-Pod). For workloads where build
-  cache is a major performance lever — BuildKit, Gradle, Maven, Bazel,
-  Nix — this means you pay the cold-cache penalty on every job, or you
-  shift to expensive `ReadWriteMany` storage and accept its own
-  trade-offs.
+  mid-job-kill class of bug. Kubernetes' `ReadWriteOncePod` (RWOP)
+  access mode (GA in Kubernetes 1.29) can enforce exclusive single-pod
+  mounting, but it does not solve warm-cache reuse: with KEDA's
+  ephemeral `ScaledJob` `--once` pattern, an RWOP cache volume only
+  serialises jobs (the next job blocks until the volume is released).
+  Sharing a warm cache across ephemeral jobs still forces either a
+  cold-cache penalty per job or `ReadWriteMany` storage and its own
+  trade-offs. This operator instead manages a pool of warm cache
+  volumes bound exclusively to recycled agent pods.
 
 ### What this project does
 
@@ -119,6 +134,23 @@ This is **not** a fork or rewrite of MShekow's code. The architecture
 and API design are independent. Where MShekow made design choices
 documented in his blog and README, those documents have been valuable
 prior art for understanding the problem space.
+
+### Known limitations
+
+- **Undocumented AZP jobs API** - The Azure Pipelines job-queue
+  endpoint this operator polls is the same undocumented Microsoft API
+  that KEDA uses. The KEDA project explicitly warns that its shape can
+  change without notice and that query parameters like `$top` alter the
+  JSON structure in ways that break agent matching. The demand-aware
+  capability matching feature is the part of this operator most exposed
+  to that fragility.
+
+- **Offline dummy-agent requirement** - True scale-to-zero requires
+  pre-registered offline agents so the Azure Pipelines platform queues
+  jobs when no live agents exist. This is an Azure Pipelines platform
+  constraint that affects this operator exactly as it affects KEDA. The
+  operator automates dummy-agent registration, but the underlying
+  platform dependency remains.
 
 ### Acknowledgments
 
