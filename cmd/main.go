@@ -181,7 +181,7 @@ func main() {
 	if err := (&controller.AgentPoolReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("agentpool-controller"),
+		Recorder: mgr.GetEventRecorderFor("agentpool-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "agentpool")
 		os.Exit(1)
