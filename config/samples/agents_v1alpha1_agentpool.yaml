@@ -1,9 +1,77 @@
+---
+# Example: minimal pool with scale-to-zero
 apiVersion: agents.amaanx86.github.io/v1alpha1
 kind: AgentPool
 metadata:
-  labels:
-    app.kubernetes.io/name: azure-devops-agent-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: agentpool-sample
+  name: build-agents
+  namespace: azure-devops-agent-operator-system
 spec:
-  # TODO(user): Add fields here
+  organizationURL: "https://dev.azure.com/myorg"
+  poolName: "shared-pool"
+  tokenSecretRef:
+    name: ado-token
+    key: pat
+
+  # Scale between 0 and 10 agents (true scale-to-zero: dummy agent registered when idle)
+  minAgents: 0
+  maxAgents: 10
+
+  # Use the operator's bundled agent image, or your own custom image
+  # agentImage: "myregistry.azurecr.io/azp-agent:latest"
+
+  agentResources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+
+  # Exclusive per-agent cache volumes (warm cache reuse across jobs)
+  # The operator pre-provisions maxAgents PVCs per template and recycles them.
+  cacheVolumes:
+    - name: buildcache
+      mountPath: /cache
+      size: "50Gi"
+      # storageClassName: "fast-ssd"  # omit to use the cluster default
+
+  # Agent placement
+  nodeSelector:
+    kubernetes.io/os: linux
+  tolerations: []
+  # affinity:
+  #   nodeAffinity:
+  #     requiredDuringSchedulingIgnoredDuringExecution:
+  #       nodeSelectorTerms:
+  #         - matchExpressions:
+  #             - key: build-tier
+  #               operator: In
+  #               values: ["high-memory"]
+
+  # Pass additional environment variables to every agent pod
+  extraEnv:
+    - name: DOCKER_HOST
+      value: "tcp://localhost:2376"
+
+  # Pod-level customization
+  podLabels:
+    team: platform
+  podAnnotations:
+    prometheus.io/scrape: "false"
+
+  # serviceAccountName: "azp-agent"   # defaults to namespace default SA
+---
+# The PAT Secret referenced above.
+# kubectl create secret generic ado-token \
+#   --from-literal=pat='<YOUR_PAT_TOKEN>' \
+#   -n azure-devops-agent-operator-system
+#
+# Required PAT scope: Agent Pools -> Read & Manage
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ado-token
+  namespace: azure-devops-agent-operator-system
+type: Opaque
+stringData:
+  pat: "<REPLACE_WITH_YOUR_PAT>"
