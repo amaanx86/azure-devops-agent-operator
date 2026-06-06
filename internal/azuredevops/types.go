@@ -35,25 +35,13 @@ type JobRequestList struct {
 }
 
 // JobRequest represents a single pipeline job in the ADO queue.
-// We unmarshal only the fields we need.
 type JobRequest struct {
-	// RequestID is the unique identifier for this job.
-	RequestID int64 `json:"requestId"`
-
-	// QueueTime is the timestamp when the job was queued (ISO8601).
-	QueueTime string `json:"queueTime"`
-
-	// AssignTime is the timestamp when the job was assigned to an agent (ISO8601).
-	// nil if not yet assigned.
-	AssignTime *string `json:"assignTime"`
-
-	// FinishTime is the timestamp when the job completed (ISO8601).
-	// nil if the job is still pending or running.
-	FinishTime *string `json:"finishTime"`
-
-	// ReservedAgent is set when a real agent has picked up the job.
-	// nil if the job is still in queue or assigned but not yet picked up.
+	RequestID     int64     `json:"requestId"`
+	QueueTime     string    `json:"queueTime"`
+	AssignTime    *string   `json:"assignTime"`
+	FinishTime    *string   `json:"finishTime"`
 	ReservedAgent *AgentRef `json:"reservedAgent"`
+	Demands       []string  `json:"demands"`
 }
 
 // AgentRef is a lightweight reference to an agent embedded in a job request.
@@ -64,25 +52,11 @@ type AgentRef struct {
 
 // RegisterAgentRequest is the request body for registering a new agent with ADO.
 type RegisterAgentRequest struct {
-	// Name is the agent name.
-	Name string `json:"name"`
-
-	// Version is the agent version.
-	Version string `json:"version"`
-
-	// OSDescription describes the operating system.
-	OSDescription string `json:"osDescription"`
-
-	// Enabled indicates if the agent is enabled.
-	// Set to false for dummy agents.
-	Enabled bool `json:"enabled"`
-
-	// ProvisioningState indicates the agent's provisioning state.
-	// Omitted for private agents as they don't support custom provisioning states.
-	ProvisioningState string `json:"provisioningState,omitempty"`
-
-	// SystemCapabilities are key-value labels the ADO platform uses for job routing
-	// and demands matching.
+	Name               string            `json:"name"`
+	Version            string            `json:"version"`
+	OSDescription      string            `json:"osDescription"`
+	Enabled            bool              `json:"enabled"`
+	ProvisioningState  string            `json:"provisioningState,omitempty"`
 	SystemCapabilities map[string]string `json:"systemCapabilities"`
 }
 
@@ -90,4 +64,28 @@ type RegisterAgentRequest struct {
 type RegisterAgentResponse struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
+}
+
+// AgentList is the response from the ADO agents list endpoint.
+type AgentList struct {
+	Count int     `json:"count"`
+	Value []Agent `json:"value"`
+}
+
+// Agent represents a registered Azure DevOps agent.
+type Agent struct {
+	ID      int    `json:"id"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Enabled bool   `json:"enabled"`
+}
+
+// JobStatus aggregates queue state for scaling decisions.
+type JobStatus struct {
+	// Pending is the total number of unfinished jobs (waiting + executing).
+	Pending int
+
+	// BusyAgentNames is the set of agent names currently executing a job.
+	// Used to avoid killing pods mid-job during scale-down.
+	BusyAgentNames map[string]bool
 }

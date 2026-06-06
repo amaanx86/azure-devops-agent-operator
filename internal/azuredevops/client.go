@@ -35,22 +35,16 @@ type Client struct {
 }
 
 // NewClient constructs a Client with HTTP Basic auth for the given PAT.
-// pat is the raw Personal Access Token string.
 func NewClient(pat string) *Client {
-	// ADO uses HTTP Basic auth with empty username: base64(":" + pat)
 	authValue := base64.StdEncoding.EncodeToString([]byte(":" + pat))
-	authHeader := "Basic " + authValue
-
 	return &Client{
 		httpClient:       &http.Client{Timeout: 30 * time.Second},
-		authorizationHdr: authHeader,
+		authorizationHdr: "Basic " + authValue,
 	}
 }
 
 // GetPoolID queries ADO to find the numeric ID of the named agent pool.
-// Returns 0 and an error if not found or if the API call fails.
-func (c *Client) GetPoolID(ctx context.Context, orgURL,
-	poolName string) (int, error) {
+func (c *Client) GetPoolID(ctx context.Context, orgURL, poolName string) (int, error) {
 	url := fmt.Sprintf(
 		"%s/_apis/distributedtask/pools?poolName=%s&api-version=7.1",
 		orgURL, poolName)
@@ -59,53 +53,63 @@ func (c *Client) GetPoolID(ctx context.Context, orgURL,
 	if err := c.getJSON(ctx, url, &poolList); err != nil {
 		return 0, err
 	}
-
 	if poolList.Count == 0 {
 		return 0, fmt.Errorf("agent pool %q not found in ADO", poolName)
 	}
 	if poolList.Count > 1 {
-		return 0, fmt.Errorf("multiple pools named %q found (expected 1)",
-			poolName)
+		return 0, fmt.Errorf("multiple pools named %q found (expected 1)", poolName)
 	}
-
 	return poolList.Value[0].ID, nil
 }
 
-// GetJobCounts returns (pending, running) job counts from the ADO queue.
-// A job is "pending" if finishTime == nil (not yet completed).
-// A job is "running" if reservedAgent != nil && finishTime == nil.
-// Both pending and running count toward scaling decisions.
-func (c *Client) GetJobCounts(ctx context.Context, orgURL string,
-	poolID int) (pending, running int, err error) {
+// GetJobStatus returns the pending job count and the set of agent names currently
+// executing a job. Both are required for safe scaling decisions.
+//
+// Pending = all jobs where FinishTime == nil (includes executing jobs).
+// BusyAgentNames = agents with a reserved job; used to avoid killing active pods.
+func (c *Client) GetJobStatus(ctx context.Context, orgURL string, poolID int) (JobStatus, error) {
 	url := fmt.Sprintf(
 		"%s/_apis/distributedtask/pools/%d/jobrequests?completedRequestCount=0&api-version=7.1",
 		orgURL, poolID)
 
 	var jobList JobRequestList
 	if err := c.getJSON(ctx, url, &jobList); err != nil {
-		return 0, 0, err
+		return JobStatus{}, err
 	}
 
+	status := JobStatus{BusyAgentNames: make(map[string]bool)}
 	for _, job := range jobList.Value {
 		if job.FinishTime == nil {
-			pending++
+			status.Pending++
 			if job.ReservedAgent != nil {
-				running++
+				status.BusyAgentNames[job.ReservedAgent.Name] = true
 			}
 		}
 	}
-
-	return pending, running, nil
+	return status, nil
 }
 
-// RegisterDummyAgent registers a disabled/offline agent with ADO.
-// The dummy agent has enabled=false and provisioningState="Unavailable",
-// which signals to ADO that the agent is not ready but the pool is active.
-// This enables true scale-to-zero: ADO accepts jobs into the queue knowing
-// that agents may come online. When real agents are registered, the dummy is
-// unregistered.
-func (c *Client) RegisterDummyAgent(ctx context.Context, orgURL string,
-	poolID int, name string) (int, error) {
+// GetAgentByName returns the ID of the named agent in the pool, or 0 if it does not exist.
+func (c *Client) GetAgentByName(ctx context.Context, orgURL string, poolID int, name string) (int, error) {
+	url := fmt.Sprintf(
+		"%s/_apis/distributedtask/pools/%d/agents?agentName=%s&api-version=7.1",
+		orgURL, poolID, name)
+
+	var agentList AgentList
+	if err := c.getJSON(ctx, url, &agentList); err != nil {
+		return 0, err
+	}
+	if agentList.Count == 0 {
+		return 0, nil
+	}
+	return agentList.Value[0].ID, nil
+}
+
+// RegisterDummyAgent registers an offline placeholder agent with ADO.
+// The dummy agent has no running process, so ADO marks it offline but still
+// accepts jobs into the pool queue. This enables true scale-to-zero: jobs queue
+// while no real agents are running, and real agents pick them up when they start.
+func (c *Client) RegisterDummyAgent(ctx context.Context, orgURL string, poolID int, name string) (int, error) {
 	req := RegisterAgentRequest{
 		Name:          name,
 		Version:       "2.300.0",
@@ -116,9 +120,7 @@ func (c *Client) RegisterDummyAgent(ctx context.Context, orgURL string,
 		},
 	}
 
-	url := fmt.Sprintf("%s/_apis/distributedtask/pools/%d/agents?api-version=7.1",
-		orgURL, poolID)
-
+	url := fmt.Sprintf("%s/_apis/distributedtask/pools/%d/agents?api-version=7.1", orgURL, poolID)
 	respBody, err := c.postJSON(ctx, url, req)
 	if err != nil {
 		return 0, err
@@ -126,31 +128,24 @@ func (c *Client) RegisterDummyAgent(ctx context.Context, orgURL string,
 
 	var resp RegisterAgentResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return 0, fmt.Errorf("parse ADO agent registration response: %w", err)
+		return 0, fmt.Errorf("parse agent registration response: %w", err)
 	}
-
 	return resp.ID, nil
 }
 
 // UnregisterAgent deletes an agent registration from ADO.
-func (c *Client) UnregisterAgent(ctx context.Context, orgURL string,
-	poolID, agentID int) error {
+func (c *Client) UnregisterAgent(ctx context.Context, orgURL string, poolID, agentID int) error {
 	url := fmt.Sprintf(
 		"%s/_apis/distributedtask/pools/%d/agents/%d?api-version=7.1",
 		orgURL, poolID, agentID)
-
 	return c.deleteJSON(ctx, url)
 }
 
-// getJSON makes a GET request and unmarshals the JSON response.
-// The result type must be passed in as a reference.
-func (c *Client) getJSON(ctx context.Context, url string,
-	result any) error {
+func (c *Client) getJSON(ctx context.Context, url string, result any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
-
 	req.Header.Set("Authorization", c.authorizationHdr)
 	req.Header.Set("Content-Type", "application/json")
 
@@ -158,42 +153,31 @@ func (c *Client) getJSON(ctx context.Context, url string,
 	if err != nil {
 		return fmt.Errorf("ADO API call failed: %w", err)
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ADO API returned %d: %s", resp.StatusCode,
-			string(body))
-	}
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("read response body: %w", err)
 	}
-
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ADO API returned %d: %s", resp.StatusCode, string(body))
+	}
 	if err := json.Unmarshal(body, result); err != nil {
 		return fmt.Errorf("unmarshal response: %w", err)
 	}
-
 	return nil
 }
 
-// postJSON makes a POST request with JSON body and returns the response body.
-func (c *Client) postJSON(ctx context.Context, url string,
-	body any) ([]byte, error) {
+func (c *Client) postJSON(ctx context.Context, url string, body any) ([]byte, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request body: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url,
-		bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-
 	req.Header.Set("Authorization", c.authorizationHdr)
 	req.Header.Set("Content-Type", "application/json")
 
@@ -201,45 +185,34 @@ func (c *Client) postJSON(ctx context.Context, url string,
 	if err != nil {
 		return nil, fmt.Errorf("ADO API call failed: %w", err)
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("ADO API returned %d: %s", resp.StatusCode,
-			string(respBody))
+		return nil, fmt.Errorf("ADO API returned %d: %s", resp.StatusCode, string(respBody))
 	}
-
 	return respBody, nil
 }
 
-// deleteJSON makes a DELETE request.
 func (c *Client) deleteJSON(ctx context.Context, url string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
-
 	req.Header.Set("Authorization", c.authorizationHdr)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ADO API call failed: %w", err)
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ADO API returned %d: %s", resp.StatusCode,
-			string(body))
+		return fmt.Errorf("ADO API returned %d: %s", resp.StatusCode, string(body))
 	}
-
 	return nil
 }
